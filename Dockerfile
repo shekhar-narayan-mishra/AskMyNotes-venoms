@@ -1,15 +1,17 @@
 # Multi-stage Dockerfile for NoteBotLM
 # Stage 1: Dependencies and build
-FROM node:18-alpine AS base
+FROM node:current-alpine3.23 AS base
 
 # Install dependencies only when needed
 FROM base AS deps
-RUN apk add --no-cache libc6-compat
+RUN apk add --no-cache libc6-compat python3 make g++ \
+    pkgconfig pixman-dev cairo-dev pango-dev libjpeg-turbo-dev \
+    giflib-dev librsvg-dev
 WORKDIR /app
 
 # Copy package files
 COPY package.json package-lock.json* ./
-RUN npm ci --only=production && npm cache clean --force
+RUN npm ci --ignore-scripts && npm cache clean --force
 
 # Stage 2: Build the application
 FROM base AS builder

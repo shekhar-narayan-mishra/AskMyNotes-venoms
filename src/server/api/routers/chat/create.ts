@@ -4,7 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { createTRPCRouter, protectedProcedure } from "@/server/api/trpc";
 import { base64ToFile } from "@/lib/utils";
 import { uploadToSupabase } from "./helper";
-import { supabase } from "@/lib/supabase";
+import { getSupabase } from "@/lib/supabase";
 import { google } from "@ai-sdk/google";
 import { generateText } from "ai";
 
@@ -175,6 +175,7 @@ export const chatRouter = createTRPCRouter({
 
       try {
         // Delete from Supabase storage
+        const supabase = getSupabase();
         const { error: storageError } = await supabase.storage
           .from("files")
           .remove([file.supabasePath]);

@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabase";
+import { getSupabase } from "@/lib/supabase";
 import { Queue } from "bullmq";
 import { db } from "@/server/db";
 
@@ -45,6 +45,7 @@ export async function uploadToSupabase(
   const randomSuffix = Math.random().toString(36).substring(2, 8);
   const key = `${new Date().getTime()}-${randomSuffix}-${safeFileName}`;
 
+  const supabase = getSupabase();
   const { data: uploadData, error: uploadError } = await supabase.storage
     .from("files")
     .upload(key, file, {

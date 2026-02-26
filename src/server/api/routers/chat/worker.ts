@@ -5,9 +5,11 @@ import { HfInference } from "@huggingface/inference";
 import { QdrantClient } from "@qdrant/js-client-rest";
 import { v4 as uuidv4 } from "uuid";
 import { db } from "@/server/db";
-import { supabase } from "@/lib/supabase";
+// import { supabase } from "@/lib/supabase";
+
 import { Worker } from "bullmq";
 import IORedis from "ioredis";
+import { getSupabase } from "@/lib/supabase";
 
 interface FileJobData {
   fileId: string;
@@ -87,6 +89,7 @@ const worker = new Worker<FileJobData>(
       throw new Error(`File with ID ${fileId} not found in the database.`);
     }
 
+    const supabase = getSupabase();
     const { data: fileBlob, error: downloadError } = await supabase.storage
       .from("files")
       .download(fileRecord.supabasePath);
