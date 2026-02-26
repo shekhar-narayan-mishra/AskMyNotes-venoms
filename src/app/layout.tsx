@@ -36,8 +36,8 @@ export default async function RootLayout({
   const session = await auth();
 
   return (
-    <html lang="en" className="font-sans" suppressHydrationWarning>
-      <body>
+    <html lang="en" className={`${syne.variable} ${spaceGrotesk.variable} font-sans`} suppressHydrationWarning>
+      <body className="font-sans">
         <ThemeProvider
           attribute="class"
           defaultTheme="system"

@@ -41,6 +41,8 @@ const XIcon = () => (
 
 interface ChatComponentProps {
   chatId?: string;
+  activeSubjectId: string;
+  voiceEnabled: boolean;
 }
 interface CitationData {
   citedText: string;
@@ -57,7 +59,7 @@ export interface UploadedFile {
   isUploading: boolean;
 }
 
-export function ChatComponent({ chatId }: ChatComponentProps) {
+export function ChatComponent({ chatId, activeSubjectId, voiceEnabled }: ChatComponentProps) {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const [citationData, setCitationData] = useState<CitationData | null>(null);
@@ -80,6 +82,7 @@ export function ChatComponent({ chatId }: ChatComponentProps) {
           message: messages.at(-1)?.parts.find((part) => part.type === "text")
             ?.text,
           chatId,
+          subjectId: activeSubjectId,
           ...body,
         },
       }),
@@ -87,25 +90,29 @@ export function ChatComponent({ chatId }: ChatComponentProps) {
     onData: (data) => {
       if (data.type === "data-chatId") {
         const newChatId = (data.data as { chatId: string }).chatId;
-        utils.chat.getById
-          .prefetch({ id: newChatId })
-          .then(() => {
-            router.push(`/chat/${newChatId}`);
-          })
-          .catch((e) => {
-            console.error("Error in prefetch:", e);
-          });
+        void utils.chat.list.invalidate();
       }
     },
-    onFinish: () => {
+    onFinish: (event) => {
       void utils.chat.getById.invalidate();
       setLastSubmittedFiles([]);
+      if (voiceEnabled && typeof window !== "undefined" && window.speechSynthesis && (event.message as any)?.content) {
+        let textToSpeak = (event.message as any).content as string;
+        const answerMatch = textToSpeak.match(/🧠 Answer\n([\s\S]*?)(?=\n\n📚 Citations|$)/);
+        if (answerMatch && answerMatch[1]) {
+          textToSpeak = answerMatch[1].trim();
+        }
+
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(textToSpeak);
+        window.speechSynthesis.speak(utterance);
+      }
     },
   });
 
   useEffect(() => {
     if (chatData?.messages) {
-      const uiMessages: UIMessage[] = chatData.messages.map((message) => ({
+      const uiMessages: UIMessage[] = chatData.messages.map((message: any) => ({
         id: message.id,
         role:
           message.role === "USER" ? ("user" as const) : ("assistant" as const),
@@ -142,10 +149,10 @@ export function ChatComponent({ chatId }: ChatComponentProps) {
     fileId: string;
     sourceId: string;
   }) => {
-    const message = chatData?.messages.find((msg) => msg.id === messageId);
+    const message = chatData?.messages.find((msg: any) => msg.id === messageId);
     const fileSource =
       message?.messageSources[+sourceId - 1] ??
-      message?.messageSources.find((file) => file.fileId === fileId);
+      message?.messageSources.find((file: any) => file.fileId === fileId);
     if (!message || !fileSource) return;
 
     setCitationData({
@@ -194,7 +201,7 @@ export function ChatComponent({ chatId }: ChatComponentProps) {
                 <div className="mx-auto max-w-4xl space-y-4">
                   {messages.map((message, index) => {
                     const messageData = chatData?.messages.find(
-                      (msg) => msg.id === message.id,
+                      (msg: any) => msg.id === message.id,
                     );
 
                     const isNewMessage = !messageData;
@@ -371,9 +378,11 @@ export function ChatComponent({ chatId }: ChatComponentProps) {
 
             <ChatInput
               onSubmit={handleMessageSubmit}
-              disabled={isLoading}
+              disabled={isLoading || !activeSubjectId}
               uploadedFiles={uploadedFiles}
               setUploadedFiles={setUploadedFiles}
+              activeSubjectId={activeSubjectId}
+              voiceEnabled={voiceEnabled}
             />
           </div>
         </ResizablePanel>

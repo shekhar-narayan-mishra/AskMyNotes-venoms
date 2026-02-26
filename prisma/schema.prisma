@@ -46,6 +46,22 @@ model User {
   files         File[]
   sessions      Session[]
   quizzes       Quiz[]
+  subjects      Subject[]
+}
+
+model Subject {
+  id        String   @id @default(cuid())
+  name      String
+  color     String   @default("blue")
+  userId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chats     Chat[]
+  files     File[]
+  quizzes   Quiz[]
+
+  @@unique([userId, name])
 }
 
 model VerificationToken {
@@ -60,9 +76,11 @@ model Chat {
   id        String    @id @default(cuid())
   title     String?
   userId    String
+  subjectId String
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject   Subject   @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   messages  Message[]
 }
 
@@ -98,6 +116,7 @@ model MessageSource {
 model File {
   id             String          @id @default(uuid())
   userId         String
+  subjectId      String
   fileType       String
   name           String
   size           Int
@@ -107,6 +126,7 @@ model File {
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject        Subject         @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   messageFiles   MessageFile[]
   messageSources MessageSource[]
   quizzes        Quiz[]
@@ -115,12 +135,14 @@ model File {
 model Quiz {
   id               String         @id @default(cuid())
   userId           String
+  subjectId        String
   fileId           String
   title            String
   quizType         QuizType
   numberOfQuestions Int
   createdAt        DateTime       @default(now())
   user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject          Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   file             File           @relation(fields: [fileId], references: [id], onDelete: Cascade)
   quizAttempts     QuizAttempt[]
 }

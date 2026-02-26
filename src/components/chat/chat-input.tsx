@@ -1,9 +1,9 @@
 "use client";
 
-import { useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useRef, useState, useEffect, type Dispatch, type SetStateAction } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Send, Plus, XIcon, FileText } from "lucide-react";
+import { Send, Plus, XIcon, FileText, Mic, Square } from "lucide-react";
 import { api } from "@/trpc/react";
 import { fileToBase64 } from "@/lib/utils";
 import type { UploadedFile } from "@/components/chat/chat-component";
@@ -14,6 +14,8 @@ interface ChatInputProps {
   disabled?: boolean;
   uploadedFiles: UploadedFile[];
   setUploadedFiles: Dispatch<SetStateAction<UploadedFile[]>>;
+  activeSubjectId: string;
+  voiceEnabled?: boolean;
 }
 
 export function ChatInput({
@@ -21,10 +23,51 @@ export function ChatInput({
   disabled = false,
   uploadedFiles,
   setUploadedFiles,
+  activeSubjectId,
+  voiceEnabled = false,
 }: ChatInputProps) {
   const [input, setInput] = useState("");
   const [showDocumentSelector, setShowDocumentSelector] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const recognitionRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        recognitionRef.current = new SpeechRecognition();
+        recognitionRef.current.continuous = false;
+        recognitionRef.current.interimResults = true;
+
+        recognitionRef.current.onresult = (event: any) => {
+          const currentTranscript = Array.from(event.results)
+            // @ts-ignore
+            .map((res: any) => res[0].transcript)
+            .join(' ');
+          setInput(currentTranscript);
+        };
+
+        recognitionRef.current.onend = () => {
+          setIsRecording(false);
+        };
+      }
+    }
+  }, []);
+
+  const toggleRecording = () => {
+    if (isRecording) {
+      recognitionRef.current?.stop();
+      setIsRecording(false);
+    } else {
+      if (recognitionRef.current) {
+        recognitionRef.current.start();
+        setIsRecording(true);
+      } else {
+        alert("Speech recognition is not supported in this browser.");
+      }
+    }
+  };
 
   const uploadfileMutation = api.chat.uploadFiles.useMutation();
 
@@ -67,6 +110,7 @@ export function ChatInput({
                 base64,
               },
             ],
+            subjectId: activeSubjectId,
           });
 
           if (uploadedFile?.id) {
@@ -224,6 +268,21 @@ export function ChatInput({
             />
 
             <div className="flex flex-shrink-0 items-center space-x-1">
+              {voiceEnabled && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={toggleRecording}
+                  className={`h-9 w-9 rounded-xl transition-all duration-200 ${isRecording
+                    ? "bg-red-100 text-red-600 hover:bg-red-200 dark:bg-red-900/50 dark:text-red-400"
+                    : "text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"
+                    }`}
+                  title={isRecording ? "Stop recording" : "Start recording"}
+                >
+                  {isRecording ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                </Button>
+              )}
               <Button
                 type="submit"
                 variant="ghost"

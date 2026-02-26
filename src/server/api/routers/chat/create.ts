@@ -7,6 +7,13 @@ import { uploadToSupabase } from "./helper";
 import { getSupabase } from "@/lib/supabase";
 import { google } from "@ai-sdk/google";
 import { generateText } from "ai";
+import { QdrantClient } from "@qdrant/js-client-rest";
+
+const qdrantClient = new QdrantClient({
+  url: process.env.QDRANT_URL,
+  apiKey: process.env.QDRANT_API_KEY,
+});
+const collectionName = "document-embeddings-hf";
 
 export const chatRouter = createTRPCRouter({
   list: protectedProcedure.query(async ({ ctx }) => {
@@ -104,11 +111,12 @@ export const chatRouter = createTRPCRouter({
             base64: z.string(),
           }),
         ),
+        subjectId: z.string(),
       }),
     )
     .mutation(async ({ input, ctx }) => {
       try {
-        const { base64Files } = input;
+        const { base64Files, subjectId } = input;
         const files = base64Files.map((file) =>
           base64ToFile(file.base64, file.name),
         );
@@ -116,7 +124,7 @@ export const chatRouter = createTRPCRouter({
         const uploadedFiles = await Promise.all(
           files.map(async (file) => {
             try {
-              return await uploadToSupabase(file, ctx.session.user.id);
+              return await uploadToSupabase(file, ctx.session.user.id, subjectId);
             } catch (error) {
               console.error("Error uploading file:", error);
               throw new Error(`Failed to upload file: ${file.name}`);
@@ -152,6 +160,7 @@ export const chatRouter = createTRPCRouter({
         fileType: true,
         createdAt: true,
         supabasePath: true,
+        subjectId: true,
       },
     });
     return files;
@@ -188,6 +197,17 @@ export const chatRouter = createTRPCRouter({
         await ctx.db.file.delete({
           where: { id: input.fileId },
         });
+
+        // Delete embeddings from Qdrant
+        try {
+          await qdrantClient.delete(collectionName, {
+            filter: {
+              must: [{ key: "fileId", match: { value: input.fileId } }]
+            }
+          });
+        } catch (err) {
+          console.error("Failed to delete from Qdrant:", err);
+        }
 
         return { success: true };
       } catch (error) {
@@ -332,6 +352,109 @@ Make sure to return valid JSON only.`;
         throw new Error(
           error instanceof Error ? error.message : "Failed to generate quiz",
         );
+      }
+    }),
+
+  generateStudyMaterial: protectedProcedure
+    .input(z.object({ subjectId: z.string(), fileIds: z.array(z.string()) }))
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const { subjectId, fileIds } = input;
+
+        if (!fileIds || fileIds.length === 0) {
+          throw new Error("Please select at least one note to generate study materials.");
+        }
+
+        // Find selected files for this subject
+        const files = await ctx.db.file.findMany({
+          where: { subjectId, userId: ctx.session.user.id, id: { in: fileIds } },
+        });
+
+        if (files.length === 0) {
+          throw new Error("No documents found for this subject. Please upload notes first.");
+        }
+
+        const baseUrl = process.env.NEXTAUTH_URL ?? "http://localhost:3000";
+        let combinedText = "";
+
+        // Collect text from all subject files
+        for (const file of files) {
+          try {
+            const resp = await fetch(`${baseUrl}/api/pdf/full-text?fileId=${file.id}`);
+            if (resp.ok) {
+              const data = await resp.json() as { fullText?: string };
+              if (data.fullText) {
+                combinedText += `\n--- Document: ${file.name} ---\n${data.fullText.slice(0, 15000)}\n`;
+              }
+            }
+          } catch (e) {
+            console.error("Failed to parse file text for study mode:", e);
+          }
+        }
+
+        if (!combinedText.trim()) {
+          throw new Error("Could not extract text from uploaded documents.");
+        }
+
+        // Limit total text to prevent massive token usage, but allow enough context
+        combinedText = combinedText.slice(0, 50000);
+
+        const prompt = `Based ONLY on the following texts from the user's uploaded documents, generate a Study Guide containing precisely:
+1. 5 Multiple Choice Questions (MCQs)
+2. 3 Short Answer Questions (SAQs)
+
+Do not use outside knowledge.
+
+## Document Texts:
+${combinedText}
+
+## REQUIREMENTS:
+- 5 MCQs: Each must have exactly 4 options, state the correct option clearly, provide a brief explanation, and list citations (e.g. "Filename (Page X)").
+- 3 SAQs: Each must have a model answer and list citations.
+
+Respond ONLY with valid JSON matching this schema:
+{
+  "mcqs": [
+    {
+      "question": "The question text",
+      "options": ["A", "B", "C", "D"],
+      "correctAnswer": "The exact string of the correct option",
+      "explanation": "Brief explanation",
+      "citations": ["docname.pdf (Page 2)"]
+    }
+  ],
+  "saqs": [
+    {
+      "question": "The question text",
+      "modelAnswer": "The model answer",
+      "citations": ["docname.pdf (Page 5)"]
+    }
+  ]
+}
+`;
+
+        const result = await generateText({
+          model: google("gemini-2.5-flash"),
+          prompt,
+          temperature: 0.4,
+        });
+
+        let studyData: any;
+        const jsonMatch = /\{[\s\S]*\}/.exec(result.text);
+        if (jsonMatch) {
+          studyData = JSON.parse(jsonMatch[0]);
+        } else {
+          throw new Error("LLM did not return JSON");
+        }
+
+        return studyData as {
+          mcqs: Array<{ question: string, options: string[], correctAnswer: string, explanation: string, citations: string[] }>,
+          saqs: Array<{ question: string, modelAnswer: string, citations: string[] }>
+        };
+
+      } catch (error) {
+        console.error("Error generating study material:", error);
+        throw new Error(error instanceof Error ? error.message : "Failed to generate study material");
       }
     }),
 

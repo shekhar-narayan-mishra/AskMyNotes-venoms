@@ -44,48 +44,41 @@ const ensureCollectionExists = async () => {
   }
 };
 
-const PROMPT = `
-### IMPERATIVE:  
-You are a world-class research assistant. Your task is to analyze the user's QUESTION based *exclusively* on the provided CONTEXT from documents and also generate a *perfect formatted and aligned response to the user.
+const STRICT_PROMPT = `
+You are AskMyNotes, a highly strict academic copilot.
+You MUST format your answer EXACTLY according to the structure below. Do not add conversational filler.
 
 ## CONTEXT:
----
 {context}
----
 
 ## CHAT HISTORY:
----
 {chatHistory}
----
 
 ## QUESTION:
 {question}
 
-### INSTRUCTIONS:
-1.  **Analyze the CONTEXT:** Answer the QUESTION using only the information within the CONTEXT section. Do not use any external knowledge.
-2.  **Cite Sources:** For every piece of information you use from the CONTEXT, you MUST provide a precise citation.
+## REQUIRED OUTPUT FORMAT:
 
-3.  **Unique Citations:** Each citation must have a unique sequential number, even if multiple facts come from the same source. Do not repeat numbers. For example: [1], [2], [3], [4], etc.
+🧠 Answer
+[Write a comprehensive answer based ONLY on the context provided. Do not invent information.]
 
-4.  **No Information:** If the CONTEXT does not contain the answer, state clearly "Based on the provided documents, I cannot answer this question."
+📚 Citations
+[List citations in this format: filename (Page X) or filename (Chunk X)]
 
-5.  **Formatting:** The response must be perfectly structured and formatted with consistent indentation. and dont show all the Citations at the end of the response.
+🔍 Supporting Evidence
+"[Exact quote 1 from context]"
+"[Exact quote 2 from context]"
 
-6. **Academic or Subject Questions:**
-   - If the QUESTION is related to an academic topic (e.g., science, math, literature, economics, technology, etc.), include a section at the end titled:
-     **"🎥 Relevant YouTube Resources"**
-     - List 2–3 YouTube video links that can help the user understand the topic further.
-     - The videos must be *educational and reliable* (official channels, university lectures, or verified educators).
+📊 Confidence: {confidence}
 
-
-## CITATION RULES (APPLY STRICTLY):
--   Format: <citation source-id="[ID]" file-page-number="[Page Number]" file-id="[File ID]" cited-text="[Exact Quoted Text]">[ID]</citation>
--   Example: <citation source-id="1" file-page-number="5" file-id="e5232b9a-ab12..." cited-text="The company's revenue in 2023 was $1.2B.">[1]</citation>
+If you cannot answer the question based on the context, you MUST ignore the above format and instead output EXACTLY:
+Not found in your notes for {subjectName}
 `;
 
 const requestSchema = z.object({
   message: z.string(),
   chatId: z.string().optional(),
+  subjectId: z.string(),
   fileIds: z.array(z.string()).optional(),
 });
 
@@ -105,7 +98,22 @@ export async function POST(req: NextRequest) {
     }
 
     const body = (await req.json()) as unknown;
-    const { message, chatId, fileIds } = requestSchema.parse(body);
+    const { message, chatId, subjectId, fileIds } = requestSchema.parse(body);
+
+    if (!subjectId) {
+      return new Response("Please select the subject from which you need the answers from.", { status: 400 });
+    }
+
+    const subject = await db.subject.findFirst({
+      where: { id: subjectId, userId: session.user.id }
+    });
+    if (!subject) {
+      return new Response("Please select the subject from which you need the answers from.", { status: 400 });
+    }
+
+    if (!fileIds || fileIds.length === 0) {
+      return new Response("Please select at least one note to answer from.", { status: 400 });
+    }
 
     let currentChatId = chatId;
     let messageHistory: Array<{ role: "user" | "assistant"; content: string }> =
@@ -126,6 +134,7 @@ export async function POST(req: NextRequest) {
       const chat = await db.chat.create({
         data: {
           userId: session.user.id,
+          subjectId: subjectId,
           title: message.slice(0, 50) + (message.length > 50 ? "..." : ""),
         },
       });
@@ -133,21 +142,23 @@ export async function POST(req: NextRequest) {
     }
 
     let validFileIds: string[] = [];
-    if (fileIds && fileIds.length > 0) {
-      const existingFiles = await db.file.findMany({
-        where: {
-          id: { in: fileIds },
-          userId: session.user.id,
-        },
-        select: { id: true },
-      });
-      validFileIds = existingFiles.map((f) => f.id);
+    const existingFiles = await db.file.findMany({
+      where: {
+        id: { in: fileIds },
+        userId: session.user.id,
+      },
+      select: { id: true },
+    });
+    validFileIds = existingFiles.map((f) => f.id);
 
-      if (validFileIds.length !== fileIds.length) {
-        console.warn(
-          `Some file IDs are invalid or don't belong to user. Requested: ${fileIds.length}, Valid: ${validFileIds.length}`,
-        );
-      }
+    if (validFileIds.length === 0) {
+      return new Response("Please select at least one note to answer from.", { status: 400 });
+    }
+
+    if (validFileIds.length !== fileIds.length) {
+      console.warn(
+        `Some file IDs are invalid or don't belong to user. Requested: ${fileIds.length}, Valid: ${validFileIds.length}`,
+      );
     }
 
     await db.message.create({
@@ -173,49 +184,85 @@ export async function POST(req: NextRequest) {
     if (!Array.isArray(queryEmbedding)) {
       throw new Error("Failed to generate query embedding.");
     }
-    const allRelevantFileIds =
-      validFileIds.length > 0
-        ? validFileIds
-        : await db.message
-            .findMany({
-              where: { chatId: currentChatId },
-              select: { messageFiles: { select: { fileId: true } } },
-            })
-            .then((msgs) =>
-              msgs.flatMap((m) => m.messageFiles.map((f) => f.fileId)),
-            );
+    const allRelevantFileIds = validFileIds;
 
     await ensureCollectionExists();
 
-    // Debug Qdrant search payload
-    console.log("Qdrant search payload:", {
-      collectionName,
-      vectorLength: Array.isArray(queryEmbedding)
-        ? queryEmbedding.length
-        : "not-an-array",
-      vectorSample: Array.isArray(queryEmbedding)
-        ? queryEmbedding.slice(0, 5)
-        : queryEmbedding,
-      filter:
-        allRelevantFileIds && allRelevantFileIds.length > 0
-          ? { must: [{ key: "fileId", match: { any: allRelevantFileIds } }] }
-          : undefined,
-    });
+    // Hackathon Check: Ensure subject has uploaded documents
+    const subjectFileCount = await db.file.count({ where: { subjectId, userId: session.user.id } });
 
-    let searchResult;
-    try {
-      searchResult = await qdrantClient.search(collectionName, {
-        vector: queryEmbedding as number[],
-        limit: 5,
-        with_payload: true,
-        filter:
-          allRelevantFileIds && allRelevantFileIds.length > 0
-            ? { must: [{ key: "fileId", match: { any: allRelevantFileIds } }] }
-            : undefined,
+    let searchResult: any[] = [];
+    if (subjectFileCount > 0) {
+      try {
+        searchResult = await qdrantClient.search(collectionName, {
+          vector: queryEmbedding as number[],
+          limit: 5,
+          with_payload: true,
+          score_threshold: 0.5,
+          filter: {
+            must: [
+              { key: "subjectId", match: { value: subjectId } },
+              ...(allRelevantFileIds && allRelevantFileIds.length > 0
+                ? [{ key: "fileId", match: { any: allRelevantFileIds } }]
+                : [])
+            ]
+          }
+        });
+      } catch (err) {
+        console.error("Qdrant search error:", err);
+        throw err;
+      }
+    }
+
+    // Safety layer: Double check all results belong to subject
+    searchResult = searchResult.filter(r => (r.payload as any)?.subjectId === subjectId);
+
+    // Calculate Confidence
+    let confidence: "High" | "Medium" | "Low" = "Low";
+    let avgScore = 0;
+    if (searchResult.length > 0) {
+      avgScore = searchResult.reduce((acc, curr) => acc + (curr.score || 0), 0) / searchResult.length;
+      if (avgScore > 0.85) confidence = "High";
+      else if (avgScore >= 0.70) confidence = "Medium";
+      else confidence = "Low";
+    }
+
+    // Strict "Not Found" Handler
+    if (searchResult.length === 0 || avgScore < 0.4) {
+      const notFoundMessage = `Not found in your notes for ${subject.name}`;
+
+      const stream = createUIMessageStream({
+        execute: async ({ writer }) => {
+          // Immediately write the strict response
+          await new Promise(resolve => setTimeout(resolve, 500)); // simulate slight delay
+
+          writer.write({
+            type: "data-chatId",
+            data: { chatId: currentChatId },
+            transient: true,
+          });
+
+          const msgId = crypto.randomUUID();
+          writer.write({
+            type: "text-delta",
+            delta: notFoundMessage,
+            id: msgId
+          });
+
+          writer.write({
+            type: "finish"
+          });
+
+          await db.message.create({
+            data: {
+              chatId: currentChatId,
+              role: "ASSISTANT",
+              content: notFoundMessage
+            }
+          });
+        }
       });
-    } catch (err) {
-      console.error("Qdrant search error:", err);
-      throw err;
+      return createUIMessageStreamResponse({ stream });
     }
 
     const context = searchResult
@@ -248,9 +295,11 @@ Content: ${content}
           .map((msg) => `${msg.role}: ${msg.content}`)
           .join("\n");
 
-        const finalPrompt = PROMPT.replace("{context}", context)
+        const finalPrompt = STRICT_PROMPT.replace("{context}", context)
           .replace("{chatHistory}", chatHistoryString)
-          .replace("{question}", message);
+          .replace("{question}", message)
+          .replace("{confidence}", confidence)
+          .replace("{subjectName}", subject.name);
 
         const result = streamText({
           model,

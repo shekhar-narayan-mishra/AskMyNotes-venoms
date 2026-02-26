@@ -132,6 +132,7 @@ const worker = new Worker<FileJobData>(
           ...chunk.metadata,
           content: chunk.pageContent,
           fileId,
+          subjectId: fileRecord.subjectId,
           loc: { pageNumber },
         },
       };

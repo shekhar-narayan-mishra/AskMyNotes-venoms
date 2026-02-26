@@ -55,16 +55,16 @@ export const authConfig = {
       if (url.includes("/auth/signin")) {
         return url;
       }
-      // Redirect to dashboard after sign in
+      // Redirect to subjects after sign in
       if (url.startsWith("/") && !url.startsWith("//")) {
-        return `${baseUrl}/dashboard`;
+        return `${baseUrl}/subjects`;
       }
       // Allow same-origin relative callback URLs
       if (url.startsWith(baseUrl)) {
         return url;
       }
-      // Default to dashboard for external URLs
-      return `${baseUrl}/dashboard`;
+      // Default to subjects for external URLs
+      return `${baseUrl}/subjects`;
     },
   },
 } satisfies NextAuthConfig;

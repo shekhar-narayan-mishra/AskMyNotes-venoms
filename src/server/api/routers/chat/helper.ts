@@ -40,6 +40,7 @@ const fileQueue = redisConnection
 export async function uploadToSupabase(
   file: File,
   userId: string,
+  subjectId: string,
 ): Promise<FileUploadResponse> {
   const safeFileName = file.name.replace(/[^\w.]/gi, "_");
   const randomSuffix = Math.random().toString(36).substring(2, 8);
@@ -70,6 +71,7 @@ export async function uploadToSupabase(
       supabasePath: uploadData.path,
       size: file.size,
       userId,
+      subjectId,
     },
   });
 
